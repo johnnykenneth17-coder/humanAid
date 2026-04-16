@@ -1,3 +1,4 @@
 .env
 add.js
 support.sql
+node_modules
