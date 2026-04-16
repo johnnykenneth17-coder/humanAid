@@ -316,7 +316,7 @@ app.get("/api/volunteers", authenticate, async (req, res) => {
   }
 });
 
-/*app.post("/api/volunteers", async (req, res) => {
+app.post("/api/volunteers", async (req, res) => {
   const { name, email, skills } = req.body;
   if (!name || !email) {
     return res.status(400).json({ error: "Name and email required" });
@@ -332,7 +332,7 @@ app.get("/api/volunteers", authenticate, async (req, res) => {
     console.error("POST /volunteers error:", err);
     res.status(500).json({ error: err.message });
   }
-});*/
+});
 
 app.put("/api/volunteers/:id/approve", authenticate, async (req, res) => {
   const { id } = req.params;
