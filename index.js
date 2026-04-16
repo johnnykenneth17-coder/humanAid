@@ -27,6 +27,49 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 const JWT_SECRET =
   process.env.JWT_SECRET || "humanitarian_secret_key_change_me";
 
+const nodemailer = require("nodemailer");
+
+// Email transporter
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: parseInt(process.env.SMTP_PORT || "587"),
+  secure: process.env.SMTP_SECURE === "true",
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+const FROM_EMAIL = process.env.SMTP_FROM || "noreply@humanityfirst.org";
+
+function generateOTP() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+async function storeOTP(email, otp) {
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await supabase
+    .from("email_otps")
+    .insert([{ email, otp, expires_at: expiresAt.toISOString(), used: false }]);
+}
+
+async function verifyOTP(email, otp) {
+  const { data } = await supabase
+    .from("email_otps")
+    .select("*")
+    .eq("email", email)
+    .eq("otp", otp)
+    .eq("used", false)
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (!data || data.length === 0) return false;
+  await supabase.from("email_otps").update({ used: true }).eq("id", data[0].id);
+  return true;
+}
+
+// In-memory pending volunteer store (or use a DB table)
+const pendingVolunteers = new Map();
+
 // ---------- HELPER: AUTHENTICATE MIDDLEWARE ----------
 const authenticate = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -259,6 +302,8 @@ app.delete("/api/tasks/:id", authenticate, async (req, res) => {
   }
 });
 
+//const pendingVolunteers = new Map();
+
 // ---------- VOLUNTEERS ROUTES ----------
 app.get("/api/volunteers", authenticate, async (req, res) => {
   try {
@@ -271,7 +316,7 @@ app.get("/api/volunteers", authenticate, async (req, res) => {
   }
 });
 
-app.post("/api/volunteers", async (req, res) => {
+/*app.post("/api/volunteers", async (req, res) => {
   const { name, email, skills } = req.body;
   if (!name || !email) {
     return res.status(400).json({ error: "Name and email required" });
@@ -279,7 +324,7 @@ app.post("/api/volunteers", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("volunteers")
-      .insert([{ name, email, skills, status: "pending" }])
+      .insert([{ name, email, skills, phone, age, status: "pending" }])
       .select();
     if (error) throw error;
     res.json({ success: true, volunteer: data[0] });
@@ -287,7 +332,7 @@ app.post("/api/volunteers", async (req, res) => {
     console.error("POST /volunteers error:", err);
     res.status(500).json({ error: err.message });
   }
-});
+});*/
 
 app.put("/api/volunteers/:id/approve", authenticate, async (req, res) => {
   const { id } = req.params;
@@ -302,6 +347,61 @@ app.put("/api/volunteers/:id/approve", authenticate, async (req, res) => {
     console.error("PUT /volunteers/approve error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// otp mode
+
+// 1. Send OTP
+app.post("/api/volunteers/send-otp", async (req, res) => {
+  const { email, name, phone, age, skills } = req.body;
+  if (!email || !name)
+    return res.status(400).json({ error: "Email and name required" });
+  pendingVolunteers.set(email, { name, email, phone, age, skills });
+  const otp = generateOTP();
+  await storeOTP(email, otp);
+  const html = `<h2>Email Verification</h2><p>Your OTP for volunteer registration: <strong>${otp}</strong></p><p>Valid for 10 minutes.</p>`;
+  await transporter.sendMail({
+    from: FROM_EMAIL,
+    to: email,
+    subject: "Verify your email",
+    html,
+  });
+  if (!sent) return res.status(500).json({ error: "Failed to send email" });
+  res.json({ success: true });
+});
+
+// 2. Verify OTP and create volunteer
+app.post("/api/volunteers/verify-otp", async (req, res) => {
+  const { email, otp } = req.body;
+  const isValid = await verifyOTP(email, otp);
+  if (!isValid)
+    return res.status(400).json({ error: "Invalid or expired OTP" });
+  const pending = pendingVolunteers.get(email);
+  if (!pending)
+    return res.status(400).json({ error: "No pending registration" });
+  const { error } = await supabase.from("volunteers").insert([
+    {
+      name: pending.name,
+      email: pending.email,
+      phone: pending.phone || null,
+      age: pending.age ? parseInt(pending.age) : null,
+      skills: pending.skills || null,
+      status: "pending",
+    },
+  ]);
+  if (error) return res.status(500).json({ error: "Failed to register" });
+  pendingVolunteers.delete(email);
+  res.json({ success: true });
+});
+
+// 3. Admin send message to volunteer
+app.post("/api/admin/send-message", authenticate, async (req, res) => {
+  const { toEmail, subject, message } = req.body;
+  if (!toEmail || !subject || !message)
+    return res.status(400).json({ error: "Missing fields" });
+  const html = `<div><h2>HumanityFirst</h2><p>${message.replace(/\n/g, "<br>")}</p></div>`;
+  await transporter.sendMail({ from: FROM_EMAIL, to: toEmail, subject, html });
+  res.json({ success: true });
 });
 
 // ---------- RESOURCES ROUTES ----------
