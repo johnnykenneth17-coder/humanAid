@@ -364,10 +364,17 @@ app.post("/api/volunteers/send-otp", async (req, res) => {
     from: FROM_EMAIL,
     to: email,
     subject: "Verify your email",
+    html: html,
+  });
+  res.json({ success: true });
+  /*await transporter.sendMail({
+    from: FROM_EMAIL,
+    to: email,
+    subject: "Verify your email",
     html,
   });
   if (!sent) return res.status(500).json({ error: "Failed to send email" });
-  res.json({ success: true });
+  res.json({ success: true });*/
 });
 
 // 2. Verify OTP and create volunteer
