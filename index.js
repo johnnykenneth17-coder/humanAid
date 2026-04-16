@@ -316,7 +316,7 @@ app.get("/api/volunteers", authenticate, async (req, res) => {
   }
 });
 
-app.post("/api/volunteers", async (req, res) => {
+/*app.post("/api/volunteers", async (req, res) => {
   const { name, email, skills } = req.body;
   if (!name || !email) {
     return res.status(400).json({ error: "Name and email required" });
@@ -332,7 +332,7 @@ app.post("/api/volunteers", async (req, res) => {
     console.error("POST /volunteers error:", err);
     res.status(500).json({ error: err.message });
   }
-});
+});*/
 
 app.put("/api/volunteers/:id/approve", authenticate, async (req, res) => {
   const { id } = req.params;
@@ -354,61 +354,100 @@ app.put("/api/volunteers/:id/approve", authenticate, async (req, res) => {
 // 1. Send OTP
 app.post("/api/volunteers/send-otp", async (req, res) => {
   const { email, name, phone, age, skills } = req.body;
-  if (!email || !name)
+  if (!email || !name) {
     return res.status(400).json({ error: "Email and name required" });
-  pendingVolunteers.set(email, { name, email, phone, age, skills });
+  }
+
+  // Store pending data with all fields
+  pendingVolunteers.set(email, {
+    name,
+    email,
+    phone: phone || null,
+    age: age ? parseInt(age) : null,
+    skills: skills || null,
+  });
+
   const otp = generateOTP();
   await storeOTP(email, otp);
-  const html = `<h2>Email Verification</h2><p>Your OTP for volunteer registration: <strong>${otp}</strong></p><p>Valid for 10 minutes.</p>`;
-  await transporter.sendMail({
-    from: FROM_EMAIL,
-    to: email,
-    subject: "Verify your email",
-    html: html,
-  });
-  res.json({ success: true });
-  /*await transporter.sendMail({
-    from: FROM_EMAIL,
-    to: email,
-    subject: "Verify your email",
-    html,
-  });
-  if (!sent) return res.status(500).json({ error: "Failed to send email" });
-  res.json({ success: true });*/
+
+  const html = `<h2>Email Verification</h2>
+                <p>Your OTP for volunteer registration: <strong>${otp}</strong></p>
+                <p>Valid for 10 minutes.</p>`;
+
+  try {
+    await transporter.sendMail({
+      from: FROM_EMAIL,
+      to: email,
+      subject: "Verify your email",
+      html,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Email send error:", err);
+    res.status(500).json({ error: "Failed to send OTP email" });
+  }
 });
 
 // 2. Verify OTP and create volunteer
 app.post("/api/volunteers/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
+  if (!email || !otp) {
+    return res.status(400).json({ error: "Email and OTP required" });
+  }
+
   const isValid = await verifyOTP(email, otp);
-  if (!isValid)
+  if (!isValid) {
     return res.status(400).json({ error: "Invalid or expired OTP" });
+  }
+
   const pending = pendingVolunteers.get(email);
-  if (!pending)
+  if (!pending) {
     return res.status(400).json({ error: "No pending registration" });
+  }
+
+  // Insert volunteer with all fields
   const { error } = await supabase.from("volunteers").insert([
     {
       name: pending.name,
       email: pending.email,
-      phone: pending.phone || null,
-      age: pending.age ? parseInt(pending.age) : null,
-      skills: pending.skills || null,
+      phone: pending.phone,
+      age: pending.age,
+      skills: pending.skills,
       status: "pending",
     },
   ]);
-  if (error) return res.status(500).json({ error: "Failed to register" });
+
+  if (error) {
+    console.error("Insert error:", error);
+    return res.status(500).json({ error: "Failed to register volunteer" });
+  }
+
   pendingVolunteers.delete(email);
   res.json({ success: true });
 });
 
-// 3. Admin send message to volunteer
+// 3. Admin send message to volunteer (unchanged, but ensure error handling)
 app.post("/api/admin/send-message", authenticate, async (req, res) => {
   const { toEmail, subject, message } = req.body;
-  if (!toEmail || !subject || !message)
+  if (!toEmail || !subject || !message) {
     return res.status(400).json({ error: "Missing fields" });
-  const html = `<div><h2>HumanityFirst</h2><p>${message.replace(/\n/g, "<br>")}</p></div>`;
-  await transporter.sendMail({ from: FROM_EMAIL, to: toEmail, subject, html });
-  res.json({ success: true });
+  }
+  const html = `<div><h2>HumanityFirst</h2><p>${message.replace(
+    /\n/g,
+    "<br>",
+  )}</p></div>`;
+  try {
+    await transporter.sendMail({
+      from: FROM_EMAIL,
+      to: toEmail,
+      subject,
+      html,
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Message send error:", err);
+    res.status(500).json({ error: "Failed to send email" });
+  }
 });
 
 // ---------- RESOURCES ROUTES ----------
